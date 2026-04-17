@@ -233,8 +233,18 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
     free(data);
 
     // 7. Update HEAD
-    if (head_update(commit_id_out) != 0) {
-        return -1;
+    // Ensure refs directory exists
+mkdir(".pes/refs", 0755);
+mkdir(".pes/refs/heads", 0755);
+
+// Ensure branch file exists
+FILE *f = fopen(".pes/refs/heads/main", "a");
+if (f) fclose(f);
+
+// Update HEAD
+if (head_update(commit_id_out) != 0) {
+    return -1;
+}
     }
 
     return 0;
