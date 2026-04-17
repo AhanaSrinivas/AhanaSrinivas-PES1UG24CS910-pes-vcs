@@ -10,14 +10,11 @@
 //   "100644 hello.txt\0" followed by 32 raw bytes of SHA-256
 
 #include "tree.h"
-#include "index.h"
-#include "pes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
-
 
 // ─── Mode Constants ─────────────────────────────────────────────────────────
 
@@ -133,17 +130,34 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //
 // Returns 0 on success, -1 on error.
 int tree_from_index(ObjectID *id_out) {
-    // Minimal implementation (not used in Phase 2 tests)
+    Index index;
+    if (index_load(&index) != 0) return -1;
 
     Tree tree;
-    tree.count = 0;
+    memset(&tree, 0, sizeof(Tree));
+
+    // Add all index entries directly (no nesting for now)
+    for (int i = 0; i < index.count; i++) {
+        tree.entries[tree.count].mode = index.entries[i].mode;
+        tree.entries[tree.count].hash = index.entries[i].hash;
+
+        // Extract filename only (ignore directories)
+        const char *name = strrchr(index.entries[i].path, '/');
+        if (name) name++; else name = index.entries[i].path;
+
+        strncpy(tree.entries[tree.count].name, name, sizeof(tree.entries[tree.count].name)-1);
+        tree.count++;
+    }
 
     void *data;
     size_t len;
 
     if (tree_serialize(&tree, &data, &len) != 0) return -1;
 
-    if (object_write(OBJ_TREE, data, len, id_out) != 0) return -1;
+    if (object_write(OBJ_TREE, data, len, id_out) != 0) {
+        free(data);
+        return -1;
+    }
 
     free(data);
     return 0;
