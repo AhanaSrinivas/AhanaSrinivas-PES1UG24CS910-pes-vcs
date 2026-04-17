@@ -15,6 +15,21 @@
 // PROVIDED functions: index_find, index_remove, index_status
 // TODO functions:     index_load, index_save, index_add
 
+// The index acts as an intermediate layer between the working directory
+// and commits. It stores metadata of staged files including:
+// - file mode
+// - object hash
+// - modification time
+// - file size
+//
+// Key responsibilities:
+// - Load index from disk
+// - Save index atomically
+// - Add/update staged files
+// - Track working directory changes
+//
+// This is similar to Git’s staging area.
+
 #include "index.h"
 #include <time.h>
 
@@ -141,6 +156,15 @@ int index_status(const Index *index) {
 //   - hex_to_hash                      : converting the parsed string to ObjectID
 //
 // Returns 0 on success, -1 on error.
+// Loads the index file (.pes/index) into memory.
+//
+// If file does not exist:
+// - Initializes an empty index (not an error)
+//
+// File format per line:
+// <mode> <hash> <mtime> <size> <path>
+//
+// Parses each entry and populates Index struct.
 int index_load(Index *index) {
 memset(index, 0, sizeof(Index));
 
@@ -186,6 +210,14 @@ static int compare_index_entries(const void *a, const void *b) {
     return strcmp(((IndexEntry*)a)->path, ((IndexEntry*)b)->path);
 }
 
+// Saves the index to disk using atomic write.
+//
+// Steps:
+// 1. Write to temporary file (.pes/index.tmp)
+// 2. Flush and fsync to ensure durability
+// 3. Rename temp file → actual index
+//
+// This prevents corruption if program crashes mid-write.
 int index_save(const Index *index) {
     char temp[] = ".pes/index.tmp";
     FILE *f = fopen(temp, "w");
@@ -220,6 +252,17 @@ int index_save(const Index *index) {
 //   - index_find                       : checking if the file is already staged
 //
 // Returns 0 on success, -1 on error.
+// Adds a file to the index (staging area).
+//
+// Process:
+// 1. Read file contents
+// 2. Store as blob object in object store
+// 3. Compute hash
+// 4. Get file metadata (mode, size, mtime)
+// 5. Update existing entry OR create new one
+// 6. Save updated index
+//
+// This ensures staged snapshot is consistent.
 int index_add(Index *index, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
