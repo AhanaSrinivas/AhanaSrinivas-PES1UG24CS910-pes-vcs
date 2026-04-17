@@ -129,10 +129,53 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 	mkdir(PES_DIR, 0755);
 	mkdir(OBJECTS_DIR, 0755);
 
-	// Create shard directory (.pes/objects/XX)
-	char shard_dir[512];
-	snprintf(shard_dir, sizeof(shard_dir), "%s/%.2s", OBJECTS_DIR, path + strlen(OBJECTS_DIR) + 1);
-	mkdir(shard_dir, 0755);
+	// Extract shard directory from path
+char shard_dir[512];
+strncpy(shard_dir, path, sizeof(shard_dir));
+
+// Remove filename → keep only directory
+char *last_slash = strrchr(shard_dir, '/');
+if (last_slash) {
+    *last_slash = '\0';
+}
+
+// Create shard directory
+mkdir(shard_dir, 0755);
+	
+	// Temporary file path
+char temp_path[512];
+snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+
+// Open temp file
+int fd = open(temp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+if (fd < 0) {
+    free(full_data);
+    return -1;
+}
+
+// Write data
+if (write(fd, full_data, total_len) != (ssize_t)total_len) {
+    close(fd);
+    free(full_data);
+    return -1;
+}
+
+// Flush to disk
+fsync(fd);
+close(fd);
+
+// Atomic rename
+rename(temp_path, path);
+
+// Sync directory
+int dir_fd = open(shard_dir, O_DIRECTORY);
+if (dir_fd >= 0) {
+    fsync(dir_fd);
+    close(dir_fd);
+}
+
+free(full_data);
+return 0;
 }
 
 
@@ -159,7 +202,51 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
-    return -1;
+    char path[512];
+    object_path(id, path, sizeof(path));
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    fseek(f, 0, SEEK_END);
+    size_t file_size = ftell(f);
+    rewind(f);
+
+    char *buffer = malloc(file_size);
+    if (!buffer) {
+        fclose(f);
+        return -1;
+    }
+
+    fread(buffer, 1, file_size, f);
+    fclose(f);
+
+    // Verify hash
+    ObjectID computed;
+    compute_hash(buffer, file_size, &computed);
+    if (memcmp(&computed, id, sizeof(ObjectID)) != 0) {
+        free(buffer);
+        return -1;
+    }
+
+    // Find header end
+    char *data_start = memchr(buffer, '\0', file_size);
+    if (!data_start) {
+        free(buffer);
+        return -1;
+    }
+
+    // Parse type
+    if (strncmp(buffer, "blob", 4) == 0) *type_out = OBJ_BLOB;
+    else if (strncmp(buffer, "tree", 4) == 0) *type_out = OBJ_TREE;
+    else *type_out = OBJ_COMMIT;
+
+    data_start++; // move past '\0'
+    *len_out = file_size - (data_start - buffer);
+
+    *data_out = malloc(*len_out);
+    memcpy(*data_out, data_start, *len_out);
+
+    free(buffer);
+    return 0;
 }
