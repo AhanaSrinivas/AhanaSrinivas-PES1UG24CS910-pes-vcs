@@ -16,6 +16,9 @@
 // TODO functions:     index_load, index_save, index_add
 
 #include "index.h"
+#include <time.h>
+
+#include "tree.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +26,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+
+// Forward declarations (since no object.h exists)
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
+uint32_t get_file_mode(const char *path);
 
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
@@ -135,7 +142,7 @@ int index_status(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_load(Index *index) {
-    index->count = 0;
+memset(index, 0, sizeof(Index));
 
     FILE *f = fopen(INDEX_FILE, "r");
     if (!f) {
@@ -180,24 +187,20 @@ static int compare_index_entries(const void *a, const void *b) {
 }
 
 int index_save(const Index *index) {
-    Index sorted = *index;
-
-    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
-
     char temp[] = ".pes/index.tmp";
     FILE *f = fopen(temp, "w");
     if (!f) return -1;
 
-    for (int i = 0; i < sorted.count; i++) {
+    for (int i = 0; i < index->count; i++) {
         char hex[HASH_HEX_SIZE + 1];
-        hash_to_hex(&sorted.entries[i].hash, hex);
+        hash_to_hex(&index->entries[i].hash, hex);
 
         fprintf(f, "%o %s %lu %u %s\n",
-                sorted.entries[i].mode,
+                index->entries[i].mode,
                 hex,
-                sorted.entries[i].mtime_sec,
-                sorted.entries[i].size,
-                sorted.entries[i].path);
+                index->entries[i].mtime_sec,
+                index->entries[i].size,
+                index->entries[i].path);
     }
 
     fflush(f);
@@ -225,16 +228,28 @@ int index_add(Index *index, const char *path) {
     size_t size = ftell(f);
     rewind(f);
 
-    void *data = malloc(size);
-    fread(data, 1, size, f);
+    void *data = malloc(size ? size : 1);
+    if (!data) {
+        fclose(f);
+        return -1;
+    }
+
+    if (size > 0 && fread(data, 1, size, f) != size) {
+        fclose(f);
+        free(data);
+        return -1;
+    }
     fclose(f);
 
     ObjectID id;
-    object_write(OBJ_BLOB, data, size, &id);
+    if (object_write(OBJ_BLOB, data, size, &id) != 0) {
+        free(data);
+        return -1;
+    }
     free(data);
 
     struct stat st;
-    stat(path, &st);
+    if (stat(path, &st) != 0) return -1;
 
     IndexEntry *e = index_find(index, path);
 
@@ -243,11 +258,16 @@ int index_add(Index *index, const char *path) {
         e = &index->entries[index->count++];
     }
 
-    e->mode = get_file_mode(path);
+    uint32_t mode = get_file_mode(path);
+    if (mode == 0) return -1;
+
+    e->mode = mode;
     e->hash = id;
     e->mtime_sec = st.st_mtime;
     e->size = st.st_size;
-    strcpy(e->path, path);
+
+    strncpy(e->path, path, sizeof(e->path) - 1);
+    e->path[sizeof(e->path) - 1] = '\0';
 
     return index_save(index);
 }
