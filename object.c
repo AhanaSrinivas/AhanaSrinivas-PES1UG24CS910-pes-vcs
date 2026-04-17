@@ -93,6 +93,13 @@ int object_exists(const ObjectID *id) {
 
 //
 // Returns 0 on success, -1 on error.
+
+// Phase 1 complete:
+// Implements content-addressable storage with:
+// - header + data hashing
+// - deduplication
+// - directory sharding
+// - atomic write (temp + rename)
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
     // TODO: Implement
     char header[64];
